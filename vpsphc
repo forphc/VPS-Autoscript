@@ -1,0 +1,305 @@
+#!/bin/bash
+
+PUBLIC_IP=$(wget -4qO- ipinfo.io/ip);
+PRIVATE_IP=$(ip addr | grep 'inet' | grep -v inet6 | grep -vE '127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | grep -o -E '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1);
+NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1);
+SERVER=$(wget -4qO- ipinfo.io/org | cut -d' ' -f2-);
+REGION=$(wget -4qO- ipinfo.io/region | sed -e "s/ /-/g");
+DATE=$(date +%m-%d-%Y);
+GIST="https://gist.githubusercontent.com/forphc/16f95185e2647d361c6ee07d690765af/raw/"
+server_dir="/etc/openvpn/server"
+client_dir="/etc/openvpn/client"
+
+
+err ()
+{
+	printf "\nTo avoid errors, please install on a fresh vps.\n" && sleep 2 && read -n 1 -s -r -p "Press any key to end " && rm -f vpsphc && exit 1
+}
+
+_dropbear ()
+{
+	apt install -y dropbear
+	sed -i "s/NO_START=.*/NO_START=0/" /etc/default/dropbear
+	sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=143/" /etc/default/dropbear
+	sed -i 's%DROPBEAR_BANNER=.*%DROPBEAR_BANNER="/etc/banner"%' /etc/default/dropbear
+	touch /etc/banner
+	systemctl restart dropbear
+	if ! systemctl status dropbear &> /dev/null; then
+		printf "\nFailed to install Dropbear\n" && err
+	fi
+}
+
+_stunnel4 ()
+{
+	apt install -y stunnel4
+	curl -skL "$GIST/stunnel.conf" -o /etc/stunnel/stunnel.conf
+	curl -skL "$GIST/stunnel.pem" -o /etc/stunnel/stunnel.pem
+	sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
+	systemctl restart stunnel4
+	if ! systemctl status stunnel4 &> /dev/null; then
+		printf "\nFailed to install Stunnel4\n" && err
+	fi
+}
+
+_squid ()
+{
+	apt install -y squid
+	mv /etc/squid/squid.conf /etc/squid/squid.conf.bak
+	curl -skL "$GIST/squid.conf" -o /etc/squid/squid.conf
+	sed -i "s/xxxx/$PUBLIC_IP/g" /etc/squid/squid.conf
+	systemctl restart squid
+	if ! systemctl status squid &> /dev/null; then
+		printf "\nFailed to install Squid\n" && err
+	fi
+}
+
+_openvpn ()
+{
+	apt install -y gnupg
+	os_release=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d= -f2)
+	wget -q -O - https://swupdate.openvpn.net/repos/repo-public.gpg|apt-key add -
+	printf "deb http://build.openvpn.net/debian/openvpn/stable %s main" "$os_release" > /etc/apt/sources.list.d/openvpn-aptrepo.list
+	apt update
+	apt install -y openvpn openssl ca-certificates
+
+	if [[ -d /etc/openvpn/easy-rsa/ ]]; then
+		rm -rf /etc/openvpn/easy-rsa/
+	fi
+	mkdir -p /etc/openvpn/easy-rsa/phc-easyrsa/
+	curl -skL "https://raw.githubusercontent.com/forphc/VPS-Autoscript/main/phc-easyrsa.zip" -o /etc/openvpn/easy-rsa/phc-easyrsa/phc-easyrsa.zip
+	cd /etc/openvpn/easy-rsa/phc-easyrsa/
+	unzip -q phc-easyrsa.zip
+	cp pki/ca.crt pki/private/ca.key "pki/issued/server.crt" "pki/private/server.key" /etc/openvpn
+	cd ~
+	curl -skL "$GIST/server_tcp.conf" -o "$server_dir"/server_tcp.conf
+	printf "\nplugin %s /etc/pam.d/login" "$(find / -name openvpn-plugin-auth-pam.so)" >> "$server_dir"/server_tcp.conf
+	curl -skL "$GIST/server_udp.conf" -o "$server_dir"/server_udp.conf
+	printf "\nplugin %s /etc/pam.d/login" "$(find / -name openvpn-plugin-auth-pam.so)" >> "$server_dir"/server_udp.conf
+	curl -skL "$GIST/client_tcp.ovpn" -o "$client_dir"/client_tcp.ovpn
+	printf '\n<ca>\n' >> "$client_dir"/client_tcp.ovpn
+	cat /etc/openvpn/easy-rsa/phc-easyrsa/pki/ca.crt >> "$client_dir"/client_tcp.ovpn
+	printf '</ca>' >> "$client_dir"/client_tcp.ovpn
+
+	BUILDVER=$(openvpn --version | grep "^OpenVPN" | awk '{print $2}')
+	SQUIDPORT=$(netstat -tlpn | grep -i 'squid' | awk '{print $4}' | sed -e 's/.*://' | head -1)
+	sed -i "s/xxxx/$PUBLIC_IP/g" "$client_dir"/client_tcp.ovpn
+	sed -i "s/SERVER&LOC/$SERVER - $REGION/" "$client_dir"/client_tcp.ovpn
+	sed -i "s/DATETODAY/$DATE/g" "$client_dir"/client_tcp.ovpn
+	sed -i "s/BUILD/$BUILDVER/g" "$client_dir"/client_tcp.ovpn
+	sed -i "s/squidport/$SQUIDPORT/g" "$client_dir"/client_tcp.ovpn
+
+	curl -skL "$GIST/client_udp.ovpn" -o "$client_dir"/client_udp.ovpn
+	printf '\n<ca>\n' >> "$client_dir"/client_udp.ovpn
+	cat /etc/openvpn/easy-rsa/phc-easyrsa/pki/ca.crt >> "$client_dir"/client_udp.ovpn
+	printf '</ca>' >> "$client_dir"/client_udp.ovpn
+	sed -i "s/xxxx/$PUBLIC_IP/g" "$client_dir"/client_udp.ovpn
+	sed -i "s/SERVER&LOC/$SERVER - $REGION/" "$client_dir"/client_udp.ovpn
+	sed -i "s/DATETODAY/$DATE/g" "$client_dir"/client_udp.ovpn
+	sed -i "s/BUILD/$BUILDVER/g" "$client_dir"/client_udp.ovpn
+
+	mkdir -p /var/log/openvpn
+
+	printf 1 > /proc/sys/net/ipv4/ip_forward
+	printf 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-openvpn.conf
+	sysctl -p &> /dev/null
+
+	systemctl enable openvpn-server@server_tcp.service &> /dev/null
+	systemctl enable openvpn-server@server_udp.service &> /dev/null
+	systemctl restart openvpn-server@server_tcp.service
+	systemctl restart openvpn-server@server_udp.service
+	
+	if [ $? -ne 0 ]; then
+		printf "\nFailed to install OpenVPN\n" && err
+	fi	
+}
+
+_apache ()
+{
+	curl -skL "$GIST/apache2.sh" -o /tmp/apache2.sh && chmod +x /tmp/apache2.sh && bash /tmp/apache2.sh
+	if ! systemctl status apache2 &> /dev/null; then
+		printf "\nFailed to install Apache2\n" && err
+	fi
+}
+
+_ws()
+{
+	curl -skL "$GIST/startnoload" -o /usr/local/sbin/startnoload && chmod +x /usr/local/sbin/startnoload
+}
+
+
+_webmin ()
+{
+	apt-get install apt-transport-https gnupg2 -y
+	printf "deb https://download.webmin.com/download/repository sarge contrib" > /etc/apt/sources.list.d/webmin.list
+	curl -s https://download.webmin.com/jcameron-key.asc | sudo apt-key add -
+	apt update
+	apt install webmin -y
+	sed -i "s/ssl=1/ssl=0/" /etc/webmin/miniserv.conf
+	systemctl restart webmin
+	if ! systemctl status webmin &> /dev/null; then
+		printf "\nFailed to install Webmin\n" && err
+	fi
+}
+
+
+_badvpn ()
+{
+	curl -skL "https://www.dropbox.com/s/g3ggj96itbqybd6/badvpn-udpgw?dl=0" -o /usr/local/bin/badvpn-udpgw 
+	chmod +x /usr/local/bin/badvpn-udpgw
+	curl -skL "$GIST/badvpn-udpgw.service" -o /lib/systemd/system/badvpn-udpgw.service
+	systemctl daemon-reload
+	systemctl enable badvpn-udpgw &> /dev/null
+	systemctl start badvpn-udpgw
+}
+
+_fail2ban ()
+{
+	apt install -y fail2ban &> /dev/null
+	cp /etc/fail2ban/fail2ban.conf /etc/fail2ban/fail2ban.local
+	cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
+	systemctl restart fail2ban
+}
+
+_menu_scripts ()
+{
+	curl -skL 'https://raw.githubusercontent.com/forphc/VPS-Autoscript/main/menu.zip' -o /tmp/menu.zip
+	cp /tmp/menu.zip /usr/local/sbin/
+	cd /usr/local/sbin/
+	unzip -q menu.zip
+	cd ~
+	chmod -R 755 /usr/local/sbin
+}
+
+_misc ()
+{
+	# Limit access of users
+	printf "/bin/false\n" >> /etc/shells
+	printf "/usr/sbin/nologin" >> /etc/shells
+
+	# Set timezone to GMT+8 PHST
+	timedatectl set-timezone Asia/Manila
+
+	# Disable IPv6
+	cat >> /etc/sysctl.d/99-sysctl.conf << END
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+net.ipv6.conf.eth0.disable_ipv6 = 1
+END
+
+	# Add neofetch
+	cat > /etc/profile.d/login.sh << END
+clear
+neofetch
+END
+
+	# Cron
+	mkdir /etc/phc
+	curl -skL "$GIST/delexp.sh" -o /etc/phc/delexp.sh
+	chmod +x /etc/phc/delexp.sh
+	crontab -l > mycron
+	printf "0 1 * * * /etc/phc/delexp.sh >/dev/null 2>&1\n" >> mycron
+	crontab mycron
+	rm mycron
+}
+
+_iptables ()
+{
+	apt install -y iptables iptables-persistent
+	curl -skL "$GIST/rules.v4" -o /etc/iptables/rules.v4
+	sed -i "s/xxxx/$PUBLIC_IP/g" /etc/iptables/rules.v4
+	sed -i "s/yyyy/$PRIVATE_IP/g" /etc/iptables/rules.v4
+	sed -i "s/CCC/$NIC/g" /etc/iptables/rules.v4
+	systemctl daemon-reload
+	iptables-restore < /etc/iptables/rules.v4
+	netfilter-persistent save &> /dev/null
+	systemctl enable netfilter-persistent &> /dev/null
+}
+
+install_all ()
+{
+	_dropbear
+	_stunnel4
+	_squid
+	_openvpn
+	_apache
+	_ws
+	_webmin
+	_badvpn
+	_fail2ban
+	_menu_scripts
+	_misc
+	_iptables
+}
+
+_start ()
+{
+	clear
+	printf "\nProceed installation?\n"
+
+	select option in YES NO
+	do
+		case $option in
+				YES)
+				clear
+				t1=$(date +%s)
+				export DEBIAN_FRONTEND=noninteractive
+				apt clean
+				apt update
+				apt autoremove --fix-missing -y -f
+				apt upgrade -y -f
+				apt install -y curl net-tools zip unzip vnstat neofetch
+				install_all
+				break
+				;;
+				NO)
+				printf "Cancelled, exiting..." && sleep 3
+				clear && exit
+				break
+				;;
+		esac
+	done
+}
+
+
+check_system ()
+{
+	OS_RELEASE_ID=$(grep "^ID=" /etc/os-release | cut -d '=' -f 2- | sed 's|"||g')
+	OS_RELEASE_VERSION_ID=$(grep "^VERSION_ID=" /etc/os-release | cut -d '=' -f 2- | sed 's|"||g')
+
+	SUPPORTED=false
+	[[ "${OS_RELEASE_ID}" == "debian" && "${OS_RELEASE_VERSION_ID}" == "9" ]] && SUPPORTED=true
+	[[ "${OS_RELEASE_ID}" == "debian" && "${OS_RELEASE_VERSION_ID}" == "10" ]] && SUPPORTED=true
+	[[ "${OS_RELEASE_ID}" == "ubuntu" && "${OS_RELEASE_VERSION_ID}" == "18.04" ]] && SUPPORTED=true
+	[[ "${OS_RELEASE_ID}" == "ubuntu" && "${OS_RELEASE_VERSION_ID}" == "20.04" ]] && SUPPORTED=true
+
+	if [[ "${SUPPORTED}" == "false" ]]; then
+		printf "OS distribution not supported by this script.\n"
+		exit 1
+	else
+		_start
+	fi
+}
+
+# Verify root
+if [[ $(whoami) = root ]]; then
+	check_system
+else
+	printf "You must be logged in as root before running this script.\n"
+	exit 1
+fi
+
+
+# Done
+t2=$(date +%s)
+tf=$(( $t2 - $t1 ))
+printf "\n"
+printf "Installation success. \n"
+printf "Time taken: \e[1;32m $(date -d@$tf +%Mmin:%Ssec)\e[0m \n"
+printf "Access management panel using command: \e[1;32mmenu\e[0m \n"
+printf "Please reboot your system using command, \e[1;32mreboot\e[0m\n\n"
+read -n 1 -s -r -p "Press any key to end"
+# clean_up
+rm -f /tmp/apache2.sh
+rm -f /tmp/menu.zip
+rm -f vpsphc && exit
