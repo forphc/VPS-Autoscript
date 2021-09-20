@@ -130,7 +130,7 @@ _ws()
 
 _webmin ()
 {
-	apt-get install apt-transport-https gnupg2 -y
+	apt-get install apt-transport-https gnupg2 libxml-parser-perl -y
 	printf "deb https://download.webmin.com/download/repository sarge contrib" > /etc/apt/sources.list.d/webmin.list
 	curl -s https://download.webmin.com/jcameron-key.asc | sudo apt-key add -
 	apt update
