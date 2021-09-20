@@ -296,7 +296,7 @@ t2=$(date +%s)
 tf=$(( $t2 - $t1 ))
 printf "\n"
 printf "Installation success. \n"
-printf "Time taken: \e[1;32m $(date -d@$tf +%Mmin:%Ssec)\e[0m \n"
+printf "Time taken: \e[1;32m %s \e[0m \n" "$(date -d@$tf +%Mmin:%Ssec)"
 printf "Access management panel using command: \e[1;32mmenu\e[0m \n"
 printf "Please reboot your system using command, \e[1;32mreboot\e[0m\n\n"
 read -n 1 -s -r -p "Press any key to end"
