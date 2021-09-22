@@ -199,7 +199,9 @@ END
 	curl -skL "$GIST/delexp.sh" -o /etc/phc/delexp.sh
 	chmod +x /etc/phc/delexp.sh
 	crontab -l > mycron
-	printf "0 1 * * * /etc/phc/delexp.sh >/dev/null 2>&1\n" >> mycron
+	printf "SHELL=/bin/bash
+	PATH=/bin:/sbin:/usr/bin:/usr/sbin
+	* * * * * /bin/bash /etc/phc/delexp.sh >/dev/null 2>&1 \n\n" >> mycron
 	crontab mycron
 	rm mycron
 }
