@@ -201,7 +201,7 @@ END
 	crontab -l > mycron
 	printf "SHELL=/bin/bash
 	PATH=/bin:/sbin:/usr/bin:/usr/sbin
-	* * * * * /bin/bash /etc/phc/delexp.sh >/dev/null 2>&1 \n\n" >> mycron
+	0 1 * * * /bin/bash /etc/phc/delexp.sh >/dev/null 2>&1 \n\n" >> mycron
 	crontab mycron
 	rm mycron
 }
