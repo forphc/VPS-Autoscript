@@ -132,7 +132,7 @@ _webmin ()
 {
 	apt-get install apt-transport-https gnupg2 libxml-parser-perl -y
 	printf "deb https://download.webmin.com/download/repository sarge contrib" > /etc/apt/sources.list.d/webmin.list
-	curl -s https://download.webmin.com/jcameron-key.asc | sudo apt-key add -
+	curl -s https://download.webmin.com/jcameron-key.asc | apt-key add -
 	apt update
 	apt install webmin -y
 	sed -i "s/ssl=1/ssl=0/" /etc/webmin/miniserv.conf
