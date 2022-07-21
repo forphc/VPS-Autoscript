@@ -20,9 +20,11 @@ err ()
 _dropbear ()
 {
 	apt install -y dropbear
-	sed -i "s/NO_START=.*/NO_START=0/" /etc/default/dropbear
-	sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=143/" /etc/default/dropbear
-	sed -i 's%DROPBEAR_BANNER=.*%DROPBEAR_BANNER="/etc/banner"%' /etc/default/dropbear
+	sed -i '
+		s#NO_START=.*#NO_START=0#
+		s#DROPBEAR_PORT=.*#DROPBEAR_PORT=143#
+		s#DROPBEAR_BANNER=.*#DROPBEAR_BANNER="/etc/banner"#
+	' /etc/default/dropbear
 	: > /etc/banner
 	systemctl restart dropbear
 	if ! systemctl status dropbear &> /dev/null; then
@@ -76,31 +78,34 @@ _openvpn ()
 	curl -skL "$GIST/server_udp.conf" -o "$server_dir"/server_udp.conf
 	printf "\nplugin %s /etc/pam.d/login" "$(find / -name openvpn-plugin-auth-pam.so)" >> "$server_dir"/server_udp.conf
 	curl -skL "$GIST/client_tcp.ovpn" -o "$client_dir"/client_tcp.ovpn
-	printf '\n<ca>\n' >> "$client_dir"/client_tcp.ovpn
+	printf '\n%s\n' '<ca>' >> "$client_dir"/client_tcp.ovpn
 	cat /etc/openvpn/easy-rsa/phc-easyrsa/pki/ca.crt >> "$client_dir"/client_tcp.ovpn
 	printf '</ca>' >> "$client_dir"/client_tcp.ovpn
 
-	BUILDVER=$(openvpn --version | grep "^OpenVPN" | awk '{print $2}')
-	SQUIDPORT=$(netstat -tlpn | grep -i 'squid' | awk '{print $4}' | sed -e 's/.*://' | head -1)
-	sed -i "s/xxxx/$PUBLIC_IP/g" "$client_dir"/client_tcp.ovpn
-	sed -i "s/SERVER&LOC/$SERVER - $REGION/" "$client_dir"/client_tcp.ovpn
-	sed -i "s/DATETODAY/$DATE/g" "$client_dir"/client_tcp.ovpn
-	sed -i "s/BUILD/$BUILDVER/g" "$client_dir"/client_tcp.ovpn
-	sed -i "s/squidport/$SQUIDPORT/g" "$client_dir"/client_tcp.ovpn
-
+	BUILDVER=$(openvpn --version | sed -nE '/OpenVPN/ {s_OpenVPN.([^ ]*)..*_\1_p;q}')
+	SQUIDPORT=$(netstat -tlpn | sed -nE '/squid/ {s_.*[0-9]:([0-9]*) .*_\1_p;q}')
+	sed -i "
+		s#xxxx#${PUBLIC_IP}#g
+		s_SERVER&LOC_${SERVER} - ${REGION}_
+		s_DATETODAY_${DATE}_g
+		s_BUILD_${BUILDVER}_g
+		s_squidport_${SQUIDPORT}_g
+	" "$client_dir"/client_tcp.ovpn
+	
 	curl -skL "$GIST/client_udp.ovpn" -o "$client_dir"/client_udp.ovpn
 	printf '\n%s\n' '<ca>' >> "$client_dir"/client_udp.ovpn
 	cat /etc/openvpn/easy-rsa/phc-easyrsa/pki/ca.crt >> "$client_dir"/client_udp.ovpn
 	printf '%s' '</ca>' >> "$client_dir"/client_udp.ovpn
-	sed -i "s/xxxx/$PUBLIC_IP/g" "$client_dir"/client_udp.ovpn
-	sed -i "s/SERVER&LOC/$SERVER - $REGION/" "$client_dir"/client_udp.ovpn
-	sed -i "s/DATETODAY/$DATE/g" "$client_dir"/client_udp.ovpn
-	sed -i "s/BUILD/$BUILDVER/g" "$client_dir"/client_udp.ovpn
-
+	sed -i "
+		s#xxxx#${PUBLIC_IP}#g
+		s_SERVER&LOC_${SERVER} - ${REGION}_
+		s_DATETODAY_${DATE}_g
+		s_BUILD_${BUILDVER}_g
+	" "$client_dir"/client_udp.ovpn
 	mkdir -p /var/log/openvpn
 
-	printf 1 > /proc/sys/net/ipv4/ip_forward
-	printf 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-openvpn.conf
+	printf '%s' '1' > /proc/sys/net/ipv4/ip_forward
+	printf '%s' 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-openvpn.conf
 	sysctl -p &> /dev/null
 	
 	for action in enable restart; do
@@ -207,9 +212,11 @@ _iptables ()
 {
 	apt install -y iptables iptables-persistent
 	curl -skL "$GIST/rules.v4" -o /etc/iptables/rules.v4
-	sed -i "s/xxxx/$PUBLIC_IP/g" /etc/iptables/rules.v4
-	sed -i "s/yyyy/$PRIVATE_IP/g" /etc/iptables/rules.v4
-	sed -i "s/CCC/$NIC/g" /etc/iptables/rules.v4
+	sed -i "
+		s#xxxx#${PUBLIC_IP}#g
+		s#yyyy#${PRIVATE_IP}#g
+		s#CCC#${NIC}#g
+	" /etc/iptables/rules.v4
 	systemctl daemon-reload
 	iptables-restore < /etc/iptables/rules.v4
 	netfilter-persistent save &> /dev/null
@@ -298,7 +305,7 @@ while IFS= read -r iter; do
 done <<-EOF
 
 Installation success.
-Time taken: \033[1;32m $(date -d@$tf +%Mmin:%Ssec) \033[0m
+Time taken: \033[1;32m $(date -d@${tf} +%Mmin:%Ssec) \033[0m
 Access management panel using command: \033[1;32mmenu\033[0m
 Please reboot your system using command, \033[1;32mreboot\033[0m
 
